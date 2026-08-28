@@ -1,0 +1,24 @@
+# Secrets — never commit these
+.env
+client_secret.json
+token.json
+gdrive_service_account.json
+
+# Runtime data
+*.db
+audio/
+videos/
+temp/
+logs/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+serviceAccountKey.json.json
+node-v24.15.0-x64.msi
