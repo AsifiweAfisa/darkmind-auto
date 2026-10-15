@@ -3,6 +3,13 @@ config.py — Centralized configuration loaded from environment variables.
 
 All other modules import constants from here. Never read os.getenv directly
 elsewhere — keeps secrets surface auditable in one place.
+
+Note on tokens: most platform access tokens are now managed dynamically via
+token_manager.py + the `tokens` table in SQLite (so refreshed tokens survive
+redeploys on ephemeral filesystems like Railway's). The *_ACCESS_TOKEN /
+*_CLIENT_* values below are only used to SEED that table the first time
+(see seed_tokens.py) — day-to-day, the uploaders read through token_manager,
+not directly from these constants.
 """
 
 import os
@@ -52,25 +59,45 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "")
 
 # --- YouTube ---
+# Only used by seed_tokens.py to bootstrap the DB-backed token the first
+# time. After seeding, uploader_youtube.py reads/refreshes via token_manager.
 YOUTUBE_CLIENT_SECRETS_FILE = os.getenv("YOUTUBE_CLIENT_SECRETS_FILE", "client_secret.json")
 YOUTUBE_TOKEN_FILE = os.getenv("YOUTUBE_TOKEN_FILE", "token.json")
 
+# --- Meta app credentials (App Settings -> Basic in the Meta dashboard) ---
+# Optional but recommended. With these, token_manager can (a) look up each
+# Meta token's real expiry date and (b) renew Facebook-Login user tokens,
+# which is how the Instagram token is renewed. Without them the Instagram
+# token still works but cannot be tracked or auto-renewed.
+META_APP_ID = os.getenv("META_APP_ID", "")
+META_APP_SECRET = os.getenv("META_APP_SECRET", "")
+
 # --- Instagram ---
+# IG_ACCESS_TOKEN is only used by seed_tokens.py; day-to-day access goes
+# through token_manager, which tracks its expiry and renews it in time.
 IG_USER_ID = os.getenv("IG_USER_ID", "")
 IG_ACCESS_TOKEN = os.getenv("IG_ACCESS_TOKEN", "")
 
 # --- Facebook Page ---
+# This token does not expire (System User-derived Page token), so it is
+# read directly — no refresh logic needed.
 FB_PAGE_ID = os.getenv("FB_PAGE_ID", "")
 FB_PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN", "")
 
 # --- Threads ---
-# Separate token/id from Instagram/Facebook — Threads uses graph.threads.net
-# and its own auth flow. See README for how to generate these.
+# THREADS_ACCESS_TOKEN is only used by seed_tokens.py; day-to-day access
+# goes through token_manager, auto-refreshed before the 60-day expiry.
 THREADS_USER_ID = os.getenv("THREADS_USER_ID", "")
 THREADS_ACCESS_TOKEN = os.getenv("THREADS_ACCESS_TOKEN", "")
 
 # --- TikTok ---
+# Short-lived access token (~24h) + long-lived refresh token (~365 days).
+# TIKTOK_CLIENT_KEY/SECRET are required on every refresh call, not just at
+# seed time, so they stay here as real config (not seed-only).
+TIKTOK_CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY", "")
+TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET", "")
 TIKTOK_ACCESS_TOKEN = os.getenv("TIKTOK_ACCESS_TOKEN", "")
+TIKTOK_REFRESH_TOKEN = os.getenv("TIKTOK_REFRESH_TOKEN", "")
 TIKTOK_OPEN_ID = os.getenv("TIKTOK_OPEN_ID", "")
 
 # --- Cloud hosting (used by Instagram + Facebook + Threads for public URLs) ---

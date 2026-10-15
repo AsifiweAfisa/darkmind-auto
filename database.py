@@ -1,5 +1,7 @@
 """
-database.py — SQLite persistence for posts, run logs, and theme rotation pointer.
+database.py — SQLite persistence for posts, run logs, theme rotation pointer,
+and platform API tokens (see token_manager.py for the refresh logic that
+reads/writes the `tokens` table).
 """
 
 import sqlite3
@@ -50,6 +52,17 @@ CREATE TABLE IF NOT EXISTS rotation_state (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS tokens (
+    platform TEXT PRIMARY KEY,
+    access_token TEXT,
+    refresh_token TEXT,
+    client_id TEXT,
+    client_secret TEXT,
+    token_uri TEXT,
+    expires_at TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -66,7 +79,7 @@ def conn() -> Iterator[sqlite3.Connection]:
 
 
 def _migrate(c: sqlite3.Connection) -> None:
-    """Add columns that may be missing from a pre-existing DB file."""
+    """Add columns/tables that may be missing from a pre-existing DB file."""
     existing = {row["name"] for row in c.execute("PRAGMA table_info(posts)")}
     if "facebook_post_id" not in existing:
         c.execute("ALTER TABLE posts ADD COLUMN facebook_post_id TEXT")
@@ -78,6 +91,8 @@ def _migrate(c: sqlite3.Connection) -> None:
         c.execute("ALTER TABLE run_logs ADD COLUMN facebook_success INTEGER DEFAULT 0")
     if "threads_success" not in existing_logs:
         c.execute("ALTER TABLE run_logs ADD COLUMN threads_success INTEGER DEFAULT 0")
+    # `tokens` table itself is created by SCHEMA's CREATE TABLE IF NOT EXISTS,
+    # no column migration needed yet.
 
 
 def init_db() -> None:
@@ -187,3 +202,45 @@ def get_recent_status() -> dict:
         "last_run": last_run,
         "now": datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Token storage (used by token_manager.py)
+# ---------------------------------------------------------------------------
+
+def get_token(platform: str) -> Optional[dict]:
+    """Return the stored token row for a platform, or None if never seeded."""
+    with conn() as c:
+        row = c.execute(
+            "SELECT * FROM tokens WHERE platform = ?", (platform,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def set_token(platform: str, **fields) -> None:
+    """Upsert a token row. Only known columns may be set."""
+    allowed = {
+        "access_token", "refresh_token", "client_id", "client_secret",
+        "token_uri", "expires_at",
+    }
+    unknown = set(fields) - allowed
+    if unknown:
+        raise ValueError(f"Unknown token field(s): {unknown}")
+
+    cols = ["platform"] + list(fields.keys()) + ["updated_at"]
+    placeholders = ["?"] * (len(fields) + 1) + ["CURRENT_TIMESTAMP"]
+    vals = [platform] + list(fields.values())
+
+    update_clause = ", ".join(
+        f"{k} = excluded.{k}" for k in fields.keys()
+    )
+    update_clause += (", updated_at = CURRENT_TIMESTAMP" if fields else
+                       "updated_at = CURRENT_TIMESTAMP")
+
+    sql = (
+        f"INSERT INTO tokens ({', '.join(cols)}) "
+        f"VALUES ({', '.join(placeholders)}) "
+        f"ON CONFLICT(platform) DO UPDATE SET {update_clause}"
+    )
+    with conn() as c:
+        c.execute(sql, vals)

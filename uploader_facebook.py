@@ -1,22 +1,24 @@
 """
 uploader_facebook.py — Publish the assembled video to a Facebook Page.
 
-Requires a PAGE access token (not a User token, not a System User token —
-see README note below). Get it via:
+Requires a PAGE access token (not a User token, not a System User token).
+Get it via:
 
     GET https://graph.facebook.com/v20.0/me/accounts?fields=name,id,access_token
         &access_token=<your System User or User token>
 
-The `access_token` field in that response, scoped to your specific Page, is
-the FB_PAGE_TOKEN this module needs.
+The `access_token` field in that response, scoped to your Page, is the
+token to store (seed_tokens.py reads it from FB_PAGE_TOKEN in .env). This
+Page token does not expire, so token_manager never refreshes it.
 """
 
 import json
 
 import requests
 
-from config import FB_PAGE_ID, FB_PAGE_TOKEN
+from config import FB_PAGE_ID
 from cloud_upload import CloudUploader
+from token_manager import get_facebook_access_token
 from utils import log, retry
 
 
@@ -24,13 +26,13 @@ GRAPH = "https://graph.facebook.com/v20.0"
 
 
 @retry(times=2, delay=5.0, exceptions=(requests.RequestException,))
-def _publish(video_url: str, caption: str) -> str:
+def _publish(video_url: str, caption: str, token: str) -> str:
     r = requests.post(
         f"{GRAPH}/{FB_PAGE_ID}/videos",
         data={
             "file_url": video_url,
             "description": caption,
-            "access_token": FB_PAGE_TOKEN,
+            "access_token": token,
         },
         timeout=120,
     )
@@ -43,8 +45,9 @@ def _publish(video_url: str, caption: str) -> str:
 
 def upload_to_facebook(post: dict, video_path: str) -> str:
     """Publish the video to the configured Facebook Page. Returns the video id."""
-    if not FB_PAGE_ID or not FB_PAGE_TOKEN:
-        raise RuntimeError("FB_PAGE_ID / FB_PAGE_TOKEN not configured")
+    if not FB_PAGE_ID:
+        raise RuntimeError("FB_PAGE_ID not configured")
+    token = get_facebook_access_token()
 
     hashtags = post["hashtags"]
     if isinstance(hashtags, str):
@@ -54,7 +57,7 @@ def upload_to_facebook(post: dict, video_path: str) -> str:
     cloud = CloudUploader()
     public_url = cloud.upload(video_path)
     try:
-        video_id = _publish(public_url, caption)
+        video_id = _publish(public_url, caption, token)
         log.info("Facebook video published: id=%s", video_id)
         return video_id
     finally:

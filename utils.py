@@ -1,8 +1,15 @@
 """
 utils.py — Shared helpers: logging, retry, file ops, ID generation.
+
+Logging redacts secrets: every line written to the console and to the daily
+log file is scrubbed of access tokens, refresh tokens, client secrets and
+API keys. Python's `requests` library puts the full URL (including
+?access_token=...) into its exception messages, so without this a failed API
+call writes your live token into the log.
 """
 
 import logging
+import re
 import sys
 import time
 import uuid
@@ -16,13 +23,47 @@ from typing import Callable, Any
 from config import LOG_DIR
 
 
+# ---------------------------------------------------------------------------
+# Secret redaction
+# ---------------------------------------------------------------------------
+
+_REDACT_PATTERNS = [
+    # key=value pairs in URLs / form bodies
+    (re.compile(
+        r"(?i)\b(access_token|refresh_token|client_secret|fb_exchange_token|"
+        r"input_token|code_verifier)=([^&\s\)\"']+)"),
+     r"\1=[REDACTED]"),
+    # bare tokens, recognised by their well-known prefixes
+    (re.compile(r"\b(?:EAA|IGAA|IGQ)[A-Za-z0-9_\-]{20,}"), "[REDACTED_TOKEN]"),
+    (re.compile(r"\b(?:act|rft|clt)\.[A-Za-z0-9_\-\.~]{20,}"), "[REDACTED_TOKEN]"),
+    (re.compile(r"\bya29\.[A-Za-z0-9_\-\.]{20,}"), "[REDACTED_TOKEN]"),
+    (re.compile(r"\bgsk_[A-Za-z0-9]{20,}"), "[REDACTED_TOKEN]"),
+    (re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}"), "[REDACTED_TOKEN]"),
+]
+
+
+def redact(text: Any) -> str:
+    """Return text with anything that looks like a secret replaced."""
+    out = str(text)
+    for pattern, repl in _REDACT_PATTERNS:
+        out = pattern.sub(repl, out)
+    return out
+
+
+class _RedactingFormatter(logging.Formatter):
+    """Formats a record, then scrubs the finished text (message AND traceback)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact(super().format(record))
+
+
 def setup_logger(name: str = "darkmind") -> logging.Logger:
     """Build a logger that writes to both stdout and a daily logfile."""
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger
     logger.setLevel(logging.INFO)
-    fmt = logging.Formatter(
+    fmt = _RedactingFormatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
