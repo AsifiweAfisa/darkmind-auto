@@ -22,3 +22,7 @@ __pycache__/
 Thumbs.db
 serviceAccountKey.json.json
 node-v24.15.0-x64.msi
+*.bak
+*.bak2
+edge_test.mp3apply_*_patch.py
+apply_*_patch.py
