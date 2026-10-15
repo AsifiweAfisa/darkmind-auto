@@ -215,7 +215,7 @@ def assemble_video(post: dict, audio_path: str) -> str:
     for i, p in enumerate(clip_paths):
         out = work / f"norm_{i}.mp4"
         _run([
-            "ffmpeg", "-y", "-i", str(p),
+            "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(p),
             "-t", f"{per_clip:.3f}",
             "-vf", (
                 "scale=1080:1920:force_original_aspect_ratio=increase,"
@@ -239,13 +239,12 @@ def assemble_video(post: dict, audio_path: str) -> str:
 
     # 4. Build drawtext chain
     overlays_sorted = sorted(overlays, key=lambda o: o["time_seconds"])
-    drawtexts = ",".join(
-        _drawtext_filter(o["text"], o["time_seconds"]) for o in overlays_sorted
-    )
+    drawtexts = ""  # timed text is drawn by branding.burn_hook (wrapped, fitted, inside a safe area)
     # Dark mood overlay applied via colorchannelmixer / lutyuv before drawtext.
     vfilter = (
         "format=yuv420p,"
-        "eq=brightness=-0.08:saturation=0.85:contrast=1.05"
+        "eq=brightness=-0.08:saturation=0.85:contrast=1.05,"
+        "tpad=stop_mode=clone:stop_duration=2"
     )
     if drawtexts:
         vfilter += "," + drawtexts
@@ -270,7 +269,7 @@ def assemble_video(post: dict, audio_path: str) -> str:
                 "[a1][a2]amix=inputs=2:duration=first:dropout_transition=2[a]"
             ),
             "-map", "[v]", "-map", "[a]",
-            "-shortest",
+            "-t", f"{audio_duration:.3f}",
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
             "-preset", "veryfast", "-crf", "21",
             "-c:a", "aac", "-b:a", "192k",
@@ -284,7 +283,7 @@ def assemble_video(post: dict, audio_path: str) -> str:
             "-i", audio_path,
             "-filter_complex", f"[0:v]{vfilter}[v]",
             "-map", "[v]", "-map", "1:a",
-            "-shortest",
+            "-t", f"{audio_duration:.3f}",
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
             "-preset", "veryfast", "-crf", "21",
             "-c:a", "aac", "-b:a", "192k",
@@ -293,5 +292,10 @@ def assemble_video(post: dict, audio_path: str) -> str:
         ])
 
     cleanup_temp(work)
-    log.info("Video assembled -> %s", out_path)
+    final_dur = _probe_duration(str(out_path))
+    if final_dur < audio_duration - 0.3:
+        log.warning("Video is %.2fs but the narration is %.2fs — the "
+                    "ending may be cut off", final_dur, audio_duration)
+    log.info("Video assembled -> %s (%.1fs video / %.1fs narration)",
+             out_path, final_dur, audio_duration)
     return str(out_path)

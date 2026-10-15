@@ -29,6 +29,7 @@ from database import init_db, insert_run_log, update_post, get_post, get_recent_
 from content_generator import generate_daily_scripts
 from voiceover import generate_voiceover
 from video_assembler import assemble_video
+from branding import burn_hook
 from uploader_youtube import upload_to_youtube
 from uploader_instagram import upload_to_instagram
 from uploader_facebook import upload_to_facebook
@@ -44,7 +45,7 @@ UPLOADERS = [
     ("instagram", upload_to_instagram, "instagram_post_id"),
     ("facebook", upload_to_facebook, "facebook_post_id"),
     ("threads", upload_to_threads, "threads_post_id"),
-    # ("tiktok", upload_to_tiktok, "tiktok_post_id"),  # enable once TikTok app is approved
+    ("tiktok", upload_to_tiktok, "tiktok_post_id"),  
 ]
 
 
@@ -81,6 +82,7 @@ def _process_one(post: dict) -> dict:
     # Video
     try:
         video_path = assemble_video(post, audio_path)
+        video_path = burn_hook(post, video_path)
         update_post(post["id"], video_path=video_path)
     except Exception as e:
         msg = f"video assembly failed for {post['id']}: {e}\n{traceback.format_exc()}"

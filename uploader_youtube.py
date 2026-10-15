@@ -1,59 +1,55 @@
 """
-uploader_youtube.py — Upload the assembled MP4 to YouTube as a Short.
+uploader_youtube.py — Upload the assembled MP4 to YouTube as a Short, then
+try to set a custom thumbnail.
 
-Auth: OAuth 2.0 desktop flow. On first run, opens a browser to authorize;
-the resulting token is cached in YOUTUBE_TOKEN_FILE and refreshed
-automatically afterwards.
+Credentials come from token_manager.get_youtube_credentials(), which keeps
+the OAuth token in the database and refreshes it automatically — no
+token.json is read or written at runtime, so this works on ephemeral
+filesystems (e.g. Railway). Run seed_tokens.py once to bootstrap.
+
+Thumbnail: attempted after the upload via thumbnails.set, and NEVER fatal.
+YouTube only allows custom Shorts thumbnails for eligible channels (Partner
+Program members; the channel must also be verified), so on a newer channel
+this is expected to be refused. The failure is logged and the upload still
+counts as successful. Once the channel qualifies, it starts working with no
+code changes.
 """
 
-import os
-from pathlib import Path
-from typing import Optional
+import json
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 
-from config import YOUTUBE_CLIENT_SECRETS_FILE, YOUTUBE_TOKEN_FILE
+from branding import make_cover
+from token_manager import get_youtube_credentials
 from utils import log, retry, truncate
 
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-
-
-def _get_credentials() -> Credentials:
-    """Load cached creds or run the OAuth flow."""
-    creds: Optional[Credentials] = None
-    if os.path.exists(YOUTUBE_TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(YOUTUBE_TOKEN_FILE, SCOPES)
-    if creds and creds.valid:
-        return creds
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-    else:
-        flow = InstalledAppFlow.from_client_secrets_file(
-            YOUTUBE_CLIENT_SECRETS_FILE, SCOPES
-        )
-        creds = flow.run_local_server(port=0)
-    with open(YOUTUBE_TOKEN_FILE, "w") as f:
-        f.write(creds.to_json())
-    return creds
+def _set_thumbnail(youtube, video_id: str, post: dict, video_path: str) -> None:
+    """Best-effort custom thumbnail. Logs and returns on any failure."""
+    try:
+        cover = make_cover(post, video_path)
+        if not cover:
+            return
+        youtube.thumbnails().set(
+            videoId=video_id,
+            media_body=MediaFileUpload(cover, mimetype="image/jpeg"),
+        ).execute()
+        log.info("YouTube custom thumbnail set for %s", video_id)
+    except Exception as e:
+        log.warning(
+            "YouTube thumbnail not set (%s). Expected until the channel is "
+            "verified and eligible for custom Shorts thumbnails — the video "
+            "itself uploaded fine.", e)
 
 
 @retry(times=2, delay=5.0)
-def upload_to_youtube(post: dict, video_path: str) -> str:
-    """Upload as a public Short; return the YouTube video id."""
-    creds = _get_credentials()
-    youtube = build("youtube", "v3", credentials=creds)
-
+def _upload(youtube, post: dict, video_path: str) -> str:
     title = truncate(post["hook_text"], 60).strip()
     if not title:
         title = truncate(post["caption"], 60)
     hashtags = post["hashtags"]
     if isinstance(hashtags, str):
-        import json
         hashtags = json.loads(hashtags)
     description = (
         f"{post['caption']}\n\n"
@@ -84,6 +80,16 @@ def upload_to_youtube(post: dict, video_path: str) -> str:
         if status:
             log.info("YouTube upload progress: %d%%",
                      int(status.progress() * 100))
-    video_id = response["id"]
+    return response["id"]
+
+
+def upload_to_youtube(post: dict, video_path: str) -> str:
+    """Upload as a public Short; return the YouTube video id.
+
+    The retry wraps only the upload itself, so a thumbnail problem can never
+    cause the video to be uploaded twice."""
+    youtube = build("youtube", "v3", credentials=get_youtube_credentials())
+    video_id = _upload(youtube, post, video_path)
     log.info("YouTube upload complete: https://youtu.be/%s", video_id)
+    _set_thumbnail(youtube, video_id, post, video_path)
     return video_id
